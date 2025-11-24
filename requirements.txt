@@ -3,3 +3,6 @@ scikit-learn
 pandas
 joblib
 numpy
+fpdf
+matplotlib
+Pillow
