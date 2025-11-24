@@ -1,5 +1,7 @@
 streamlit
-scikit-learn
-pandas
+streamlit-lottie
+reportlab
 joblib
+pandas
 numpy
+matplotlib
