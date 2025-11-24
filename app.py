@@ -17,16 +17,16 @@ from reportlab.pdfgen import canvas
 
 # ---------------------- LOAD LOTTIE ----------------------
 def load_lottie(url: str):
-    """Load a Lottie animation from a URL."""
+    """Load a Lottie animation from a URL; return dict or None."""
     try:
-        r = requests.get(url)
+        r = requests.get(url, timeout=6)
         if r.status_code == 200:
             return r.json()
-    except:
+    except Exception:
         return None
     return None
 
-# Mixed theme animations
+# Mixed theme animations (if a URL fails, the value will be None and we won't call st_lottie on it)
 LOTTIE_HOME     = load_lottie("https://assets7.lottiefiles.com/packages/lf20_jcikwtux.json")
 LOTTIE_STUDY    = load_lottie("https://assets1.lottiefiles.com/packages/lf20_tutvdkg0.json")
 LOTTIE_REMedy   = load_lottie("https://assets7.lottiefiles.com/private_files/lf30_tamcv1wp.json")
@@ -96,7 +96,7 @@ ensure_default_teacher()
 def load_teachers():
     try:
         return pd.read_csv(TEACHERS_FILE)
-    except:
+    except Exception:
         return pd.DataFrame(columns=["username", "password_hash"])
 
 def authenticate(username, password):
@@ -118,8 +118,11 @@ def register_teacher(username, password):
 def save_prediction(record: dict):
     df_new = pd.DataFrame([record])
     if os.path.exists(PREDICTIONS_FILE):
-        df = pd.read_csv(PREDICTIONS_FILE)
-        df = pd.concat([df, df_new], ignore_index=True)
+        try:
+            df = pd.read_csv(PREDICTIONS_FILE)
+            df = pd.concat([df, df_new], ignore_index=True)
+        except Exception:
+            df = df_new
     else:
         df = df_new
     df.to_csv(PREDICTIONS_FILE, index=False)
@@ -129,7 +132,7 @@ def load_model(path=MODEL_FILE):
     if os.path.exists(path):
         try:
             return joblib.load(path)
-        except:
+        except Exception:
             pass
     class DummyModel:
         def predict(self, X):
@@ -148,7 +151,8 @@ if page == "Home":
     st.title("🎓 Student Performance Predictor")
     st.subheader("Make learning visible — Predict. Improve. Grow.")
 
-    st_lottie(LOTTIE_HOME, height=300)
+    if LOTTIE_HOME:
+        st_lottie(LOTTIE_HOME, height=300)
 
     st.markdown("""
     This app helps teachers and students understand performance trends,  
@@ -158,7 +162,8 @@ if page == "Home":
 # ---------------------- PREDICTION PAGE ----------------------
 elif page == "Prediction":
     st.header("📚 Predict Student Performance")
-    st_lottie(LOTTIE_STUDY, height=250)
+    if LOTTIE_STUDY:
+        st_lottie(LOTTIE_STUDY, height=250)
 
     with st.form("prediction_form"):
         name = st.text_input("Student Name")
@@ -181,13 +186,18 @@ elif page == "Prediction":
             st.error("Please enter student name and class.")
         else:
             X = np.array([[study_hours, attendance, prev_grade, sleep_hours, participation]])
-            predicted_score = float(model.predict(X)[0])
+            try:
+                predicted_score = float(model.predict(X)[0])
+            except Exception as e:
+                st.error("Model prediction failed: " + str(e))
+                predicted_score = 0.0
             predicted_score = max(0, min(100, predicted_score))
 
             st.success(f"{name} (Class {class_name}) - Predicted Score: {predicted_score:.2f}")
 
             if predicted_score > 70:
-                st_lottie(LOTTIE_SUCCESS, height=200)
+                if LOTTIE_SUCCESS:
+                    st_lottie(LOTTIE_SUCCESS, height=200)
                 st.balloons()
 
             # -------------- Visualization --------------
@@ -206,7 +216,8 @@ elif page == "Prediction":
             # Low-score remedial Lottie
             if predicted_score < 50:
                 st.warning("⚠️ Low predicted score — Remedial measures recommended:")
-                st_lottie(LOTTIE_REMedy, height=200)
+                if LOTTIE_REMedy:
+                    st_lottie(LOTTIE_REMedy, height=200)
                 st.markdown("""
                 **Recommendations:**
                 - Increase study hours gradually  
@@ -217,10 +228,9 @@ elif page == "Prediction":
                 """)
 
             # ----------------- SAVE TO TEACHER -----------------
-            teacher = None
             if show_save:
-                if "teacher_auth" in st.session_state and st.session_state.teacher_auth:
-                    teacher = st.session_state.teacher_username
+                if st.session_state.get("teacher_auth", False):
+                    teacher = st.session_state.get("teacher_username", "unknown")
                     save_prediction({
                         "timestamp": datetime.now().isoformat(),
                         "teacher": teacher,
@@ -240,57 +250,111 @@ elif page == "Prediction":
             # ----------------- PDF REPORT -----------------
             st.markdown("### 📄 Download PDF Report")
             buf = io.BytesIO()
-            pdf = canvas.Canvas(buf, pagesize=letter)
-            width, height = letter
+            try:
+                c = canvas.Canvas(buf, pagesize=letter)
+                width, height = letter
 
-            pdf.setFont("Helvetica-Bold", 16)
-            pdf.drawString(50, height - 50, "Student Performance Report")
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(50, height - 50, "Student Performance Report")
 
-            pdf.setFont("Helvetica", 12)
-            pdf.drawString(50, height - 100, f"Student Name: {name}")
-            pdf.drawString(50, height - 120, f"Class: {class_name}")
-            pdf.drawString(50, height - 140, f"Predicted Score: {predicted_score:.2f}")
+                c.setFont("Helvetica", 12)
+                c.drawString(50, height - 100, f"Student Name: {name}")
+                c.drawString(50, height - 120, f"Class: {class_name}")
+                c.drawString(50, height - 140, f"Predicted Score: {predicted_score:.2f}")
 
-            pdf.drawString(50, height - 180, "Generated using AI-based Prediction System.")
-            pdf.save()
+                # Add remedial note if needed
+                y = height - 180
+                if predicted_score < 50:
+                    c.drawString(50, y, "Remedial Measures Recommended:")
+                    y -= 20
+                    c.drawString(60, y, "- Increase study hours gradually")
+                    y -= 15
+                    c.drawString(60, y, "- Improve attendance & participation")
+                    y -= 15
+                    c.drawString(60, y, "- Focus on weak areas / tutoring")
+                    y -= 15
 
-            st.download_button(
-                "Download PDF",
-                data=buf.getvalue(),
-                file_name=f"{name}_report.pdf",
-                mime="application/pdf"
-            )
+                c.showPage()
+                c.save()
+                buf.seek(0)
+                pdf_bytes = buf.getvalue()
+                buf.close()
+
+                st.download_button(
+                    "Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"{name.replace(' ', '_')}_report.pdf",
+                    mime="application/pdf"
+                )
+            except Exception as e:
+                st.error("Failed to generate PDF: " + str(e))
 
 # ---------------------- TEACHER LOGIN ----------------------
 elif page == "Teacher Login":
     st.header("👩‍🏫 Teacher Login")
-    st_lottie(LOTTIE_LOGIN, height=250)
+    if LOTTIE_LOGIN:
+        st_lottie(LOTTIE_LOGIN, height=250)
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
         if authenticate(username, password):
-            st.session_state.teacher_auth = True
-            st.session_state.teacher_username = username
+            st.session_state["teacher_auth"] = True
+            st.session_state["teacher_username"] = username
             st.success("Login Successful!")
         else:
             st.error("Invalid username or password.")
 
+    st.markdown("---")
+    st.subheader("Register teacher (optional)")
+    new_user = st.text_input("New Username", key="reg_user")
+    new_pass = st.text_input("New Password", type="password", key="reg_pass")
+    if st.button("Register"):
+        ok, msg = register_teacher(new_user, new_pass)
+        if ok:
+            st.success("Registered new teacher. Please login.")
+        else:
+            st.error(msg)
+
 # ---------------------- DASHBOARD ----------------------
 elif page == "Dashboard":
     st.header("📊 Teacher Dashboard")
-    st_lottie(LOTTIE_DASH, height=250)
+    if LOTTIE_DASH:
+        st_lottie(LOTTIE_DASH, height=250)
 
-    if "teacher_auth" not in st.session_state or not st.session_state.teacher_auth:
+    if not st.session_state.get("teacher_auth", False):
         st.warning("Please login first!")
         st.stop()
 
     if os.path.exists(PREDICTIONS_FILE):
-        df = pd.read_csv(PREDICTIONS_FILE)
-        st.dataframe(df)
-
-        st.markdown("### Average Predicted Score")
-        st.write(df["predicted_score"].mean())
+        try:
+            df = pd.read_csv(PREDICTIONS_FILE)
+            # show only this teacher's saved predictions
+            teacher = st.session_state.get("teacher_username")
+            df_user = df[df['teacher'] == teacher] if 'teacher' in df.columns else df
+            if df_user.empty:
+                st.info("No saved predictions for your account yet.")
+            else:
+                st.dataframe(df_user.sort_values("timestamp", ascending=False))
+                st.markdown("### Average Predicted Score (your saved)")
+                st.write(df_user['predicted_score'].mean())
+                # histogram
+                try:
+                    import altair as alt
+                    chart = alt.Chart(df_user).mark_bar().encode(
+                        alt.X("predicted_score:Q", bin=alt.Bin(maxbins=20), title="Predicted Score"),
+                        y='count()'
+                    ).properties(width=700, height=300)
+                    st.altair_chart(chart)
+                except Exception:
+                    pass
+                # download entire teacher history
+                csv_bytes = df_user.to_csv(index=False).encode('utf-8')
+                st.download_button("Download your predictions (CSV)", csv_bytes, file_name=f"{teacher}_predictions.csv", mime="text/csv")
+        except Exception as e:
+            st.error("Failed to load predictions: " + str(e))
     else:
         st.info("No predictions saved yet.")
+
+st.markdown('</div>', unsafe_allow_html=True)
