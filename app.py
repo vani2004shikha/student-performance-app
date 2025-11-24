@@ -66,7 +66,7 @@ h1, h2, h3, p, label, .css-1d391kg, .css-1d391kg * {{
 
 .stButton>button {{
   background: linear-gradient(90deg,#ffd54f,#ffecb3);
-  color: #000000;
+  color: #ffffff !important;   /* <-- Predict button text WHITE */
   border-radius: 8px;
 }}
 
@@ -75,19 +75,26 @@ h1, h2, h3, p, label, .css-1d391kg, .css-1d391kg * {{
   color: #000000;
 }}
 
+/* 1️⃣ Make SIDEBAR DROPDOWN ARROW black */
 [data-testid="stSidebar"] svg {{
   fill: black !important;
   color: black !important;
 }}
 
+/* 2️⃣ Change "Predicted Score" text to WHITE inside black box */
 .predicted-score-box {{
   color: white !important;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: bold;
+  background: #000000;
+  padding: 10px 15px;
+  border-radius: 8px;
+  display: inline-block;
 }}
 
 </style>
 """
+
 st.markdown(page_bg_img, unsafe_allow_html=True)
 st.markdown('<div class="block-container">', unsafe_allow_html=True)
 
@@ -360,3 +367,4 @@ elif page == "Dashboard":
 
 
 st.markdown('</div>', unsafe_allow_html=True)
+
