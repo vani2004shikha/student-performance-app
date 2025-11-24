@@ -1,125 +1,337 @@
+# app.py - Enhanced Student Performance App (corrected)
 import streamlit as st
-from PIL import Image
+import numpy as np
 import pandas as pd
 import joblib
-import matplotlib.pyplot as plt
+import os
+from datetime import datetime
 from fpdf import FPDF
+import io
+import matplotlib.pyplot as plt
 
-# Load model
-model = joblib.load("model.pkl")  # ensure correct filename
-
-# Page config
 st.set_page_config(page_title="Student Performance Predictor", layout="wide")
 
-# Background styling
-page_style = """
+# ---------------------------
+# Styling: sky-blue + side images + black text
+# ---------------------------
+PAGE_CSS = """
 <style>
-body {
-    background-color: #cce7ff;
+/* sky-blue background */
+[data-testid="stAppViewContainer"] {
+  background: linear-gradient(180deg, #cfeefd 0%, #e6f7ff 100%);
+  background-attachment: fixed;
 }
+
+/* left and right side images */
+.side-image {
+  position: fixed;
+  top: 0;
+  width: 150px;
+  height: 100vh;
+  background-size: cover;
+  background-position: center;
+  z-index: 0;
+}
+.side-left { left: 0; }
+.side-right { right: 0; }
+
+/* central white card */
 .block-container {
-    padding-top: 2rem;
+  max-width: 980px;
+  margin-left: auto;
+  margin-right: auto;
+  background: rgba(255,255,255,0.95);
+  padding: 28px 36px;
+  border-radius: 12px;
+  box-shadow: 0 6px 30px rgba(0,0,0,0.06);
 }
-label, h1, h2, h3, p, div {
-    color: black !important;
+
+/* Force text to black for readability */
+h1, h2, h3, p, label, .stText, .stMarkdown {
+  color: #000000 !important;
 }
-.sidebar .sidebar-content {
-    background-color: #a3d4ff !important;
+
+/* input tweaks */
+.stTextInput>div>div>input, .stNumberInput>div>div>input, .stSelectbox>div>div {
+  height:44px;
+  border-radius:8px;
+  padding-left:10px;
 }
 </style>
+
+<div class="side-image side-left" style="background-image: url('https://images.unsplash.com/photo-1529070538774-1843cb3265df?auto=format&fit=crop&w=400&q=60');"></div>
+<div class="side-image side-right" style="background-image: url('https://images.unsplash.com/photo-1556012018-1b44f5f0d2b2?auto=format&fit=crop&w=400&q=60');"></div>
 """
-st.markdown(page_style, unsafe_allow_html=True)
+st.markdown(PAGE_CSS, unsafe_allow_html=True)
+st.markdown("<div class='block-container'>", unsafe_allow_html=True)
 
-# Sidebar Images
-st.sidebar.image("school_left.png", use_column_width=True)
-st.sidebar.image("students_right.png", use_column_width=True)
+# ---------------------------
+# Model loading (or fallback train)
+# ---------------------------
+MODEL_PATH = "model.pkl"
+DATA_PATH = "student_data.csv"
+model = None
 
-# Login system for teachers
-users = {"teacher": "password123"}
+def train_from_csv_and_save():
+    df = pd.read_csv(DATA_PATH)
+    # Expect dataset with these columns (if you use this fallback, ensure CSV has these names)
+    # study_hours, attendance_percent, internal_marks, assignments_score, previous_grade, family_support, final_score
+    cols = ['study_hours','attendance_percent','internal_marks','assignments_score','previous_grade','family_support']
+    if not all(c in df.columns for c in cols):
+        raise ValueError(f"CSV must contain columns: {cols} (found: {list(df.columns)})")
+    X = df[cols]
+    y = df['final_score']
+    from sklearn.linear_model import LinearRegression
+    m = LinearRegression()
+    m.fit(X, y)
+    joblib.dump(m, MODEL_PATH)
+    return m
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+# Try to load model; otherwise train if CSV present
+if os.path.exists(MODEL_PATH):
+    try:
+        model = joblib.load(MODEL_PATH)
+    except Exception as e:
+        st.warning("Could not load model.pkl: " + str(e))
+        model = None
+else:
+    if os.path.exists(DATA_PATH):
+        try:
+            model = train_from_csv_and_save()
+            st.info("Trained model from student_data.csv and saved model.pkl")
+        except Exception as e:
+            st.warning("Failed to train from CSV: " + str(e))
+            model = None
+    else:
+        st.info("No model.pkl or student_data.csv found. Upload model.pkl to the repo to use the trained model.")
 
-if not st.session_state.logged_in:
-    st.title("🔐 Teacher Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+# ---------------------------
+# Sidebar navigation (multi-page)
+# ---------------------------
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Home", "Predict", "Teacher Login", "Dashboard"])
 
-    if st.button("Login"):
-        if username in users and users[username] == password:
-            st.session_state.logged_in = True
-            st.success("Login Successful!")
+# Simple in-memory session for teacher login
+if 'teacher_logged_in' not in st.session_state:
+    st.session_state['teacher_logged_in'] = False
+    st.session_state['teacher_user'] = ""
+
+# Demo credentials (change before sharing publicly)
+DEMO_USER = "teacher"
+DEMO_PASS = "pass123"
+
+# ---------------------------
+# Home page
+# ---------------------------
+if page == "Home":
+    st.title("🎓 Student Performance Prediction")
+    st.write("This app predicts a student's final score based on several inputs and provides visualizations, remedial advice, and a downloadable PDF report.")
+    st.write("Use the Predict page to enter student data. Teachers can log in to save predictions to the Dashboard.")
+    st.info("Make sure `model.pkl` is present in the repo root for best results, otherwise the app will try to train from student_data.csv if it exists.")
+
+# ---------------------------
+# Predict page
+# ---------------------------
+elif page == "Predict":
+    st.title("Predict Student Performance")
+
+    st.subheader("Step 1 — Student information (required)")
+    col1, col2 = st.columns([2,1])
+    with col1:
+        student_name = st.text_input("Student Name")
+    with col2:
+        student_class = st.text_input("Class / Grade")
+
+    if not student_name.strip() or not student_class.strip():
+        st.warning("Please enter both Student Name and Class to continue.")
+        st.stop()
+
+    st.subheader("Step 2 — Academic & other inputs (all required)")
+    c1, c2 = st.columns(2)
+    with c1:
+        attendance = st.number_input("Attendance (%)", min_value=0, max_value=100, value=75)
+        study_hours = st.number_input("Daily Study Hours", min_value=0.0, max_value=24.0, value=3.0, step=0.5)
+        internal_marks = st.number_input("Internal Marks (out of 100)", min_value=0, max_value=100, value=60)
+    with c2:
+        assignments_score = st.number_input("Assignments Score (out of 100)", min_value=0, max_value=100, value=65)
+        previous_grade = st.number_input("Previous Grade (out of 100)", min_value=0, max_value=100, value=70)
+        family_support = st.selectbox("Family Support (0=none .. 5=strong)", [0,1,2,3,4,5], index=3)
+
+    if st.button("Predict 🎯"):
+        # Validate (number_input already ensures numeric)
+        features = [study_hours, attendance, internal_marks, assignments_score, previous_grade, family_support]
+        if any(v is None for v in features):
+            st.error("Please fill all fields.")
+            st.stop()
+
+        if model is None:
+            st.error("No model available. Upload model.pkl to the repo or provide a correct student_data.csv.")
+            st.stop()
+
+        X = np.array([features])
+        try:
+            pred = model.predict(X)[0]
+        except Exception as e:
+            st.error("Model prediction failed: " + str(e))
+            st.stop()
+
+        pred = float(max(0, min(100, pred)))  # clamp
+        st.success(f"Predicted final score for **{student_name} (Class {student_class})**: **{pred:.2f} / 100**")
+
+        # Remedial measures
+        if pred < 50:
+            st.warning("⚠️ The predicted score is low. Suggested remedial measures:")
+            st.markdown(
+                "- Create a daily study timetable and increase study hours gradually.  \n"
+                "- Improve attendance and participate in class.  \n"
+                "- Ask teachers for extra help or tutoring.  \n"
+                "- Focus on assignments and internal assessments.  \n"
+                "- Reduce distractions (phone, TV) during study time.  \n"
+                "- Regular revision & practice with past papers."
+            )
+        elif pred < 65:
+            st.info("Improvement tips: increase study hours, revise weak topics, and complete more practice assignments.")
         else:
-            st.error("Invalid credentials.")
-    st.stop()
+            st.info("Good performance predicted — keep consistent study and attendance!")
 
-# Main App Title
-st.title("🎓 Student Performance Prediction App")
-st.write("Fill the details below.")
+        # Charts: show bar chart (inputs) and a small comparison chart (internal, assignments, predicted)
+        st.subheader("Visual Summary")
+        input_df = pd.DataFrame({
+            "Metric":["Attendance(%)","Study Hours","Internal(%)","Assignments(%)","Previous Grade(%)","Family Support"],
+            "Value":[attendance, study_hours, internal_marks, assignments_score, previous_grade, family_support]
+        }).set_index("Metric")
+        st.bar_chart(input_df)
 
-# Step 1: Student Details
-st.header("Step 1: Student Information")
-col1, col2 = st.columns(2)
+        comp_df = pd.DataFrame({
+            "Stage":["Internal","Assignments","Predicted"],
+            "Score":[internal_marks, assignments_score, pred]
+        }).set_index("Stage")
+        st.line_chart(comp_df)
 
-with col1:
-    student_name = st.text_input("Student Name", max_chars=30)
-with col2:
-    student_class = st.text_input("Class", max_chars=10)
+        # Prepare single prediction record
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "student_name": student_name,
+            "student_class": student_class,
+            "attendance": attendance,
+            "study_hours": study_hours,
+            "internal_marks": internal_marks,
+            "assignments_score": assignments_score,
+            "previous_grade": previous_grade,
+            "family_support": family_support,
+            "predicted_score": round(pred,2)
+        }
+        st.write("---")
 
-# Step 2: Academic & Lifestyle Inputs
-st.header("Step 2: Academic & Lifestyle Inputs")
+        # If teacher logged in offer Save button
+        if st.session_state.get('teacher_logged_in', False):
+            if st.button("Save prediction to Dashboard"):
+                save_path = "predictions.csv"
+                df_new = pd.DataFrame([record])
+                if os.path.exists(save_path):
+                    df_existing = pd.read_csv(save_path)
+                    df_all = pd.concat([df_existing, df_new], ignore_index=True)
+                else:
+                    df_all = df_new
+                df_all.to_csv(save_path, index=False)
+                st.success("Saved to predictions.csv (Dashboard).")
 
-attendance = st.slider("Attendance (%)", 0, 100, 75)
-study_hours = st.number_input("Daily Study Hours", 0.0, 12.0, 3.0)
-internal_marks = st.slider("Internal Marks", 0, 30, 15)
-assignment_score = st.slider("Assignment Score", 0, 20, 10)
-prev_grade = st.number_input("Previous Grade Marks", 0, 100, 70)
-family_support = st.selectbox("Family Support Level", ["Low", "Medium", "High"])
+        # Downloadable PDF report (in-memory)
+        def build_pdf_bytes(rec):
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(0, 10, "Student Performance Report", ln=True, align="C")
+            pdf.ln(6)
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 8, f"Name: {rec['student_name']}", ln=True)
+            pdf.cell(0, 8, f"Class: {rec['student_class']}", ln=True)
+            pdf.cell(0, 8, f"Date: {rec['timestamp']}", ln=True)
+            pdf.ln(4)
+            pdf.cell(0, 8, "Inputs:", ln=True)
+            pdf.set_font("Arial", size=11)
+            pdf.cell(0, 7, f"- Attendance: {rec['attendance']}", ln=True)
+            pdf.cell(0, 7, f"- Study Hours: {rec['study_hours']}", ln=True)
+            pdf.cell(0, 7, f"- Internal Marks: {rec['internal_marks']}", ln=True)
+            pdf.cell(0, 7, f"- Assignments Score: {rec['assignments_score']}", ln=True)
+            pdf.cell(0, 7, f"- Previous Grade: {rec['previous_grade']}", ln=True)
+            pdf.cell(0, 7, f"- Family Support: {rec['family_support']}", ln=True)
+            pdf.ln(6)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, f"Predicted Final Score: {rec['predicted_score']} / 100", ln=True)
+            pdf.ln(6)
+            # Suggestions
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 7, "Recommendations:", ln=True)
+            pdf.set_font("Arial", size=11)
+            if rec['predicted_score'] < 50:
+                pdf.multi_cell(0, 6, "The predicted score is low. Recommended actions: increase study hours, improve attendance, get extra help from teachers, practice more, and focus on internal assessments and assignments.")
+            elif rec['predicted_score'] < 65:
+                pdf.multi_cell(0, 6, "Moderate performance. Focus on targeted revision, strengthen weak topics, and complete more practice assignments.")
+            else:
+                pdf.multi_cell(0, 6, "Good performance. Maintain consistency in study and attendance.")
+            # Output PDF as bytes
+            pdf_bytes = pdf.output(dest='S').encode('latin-1')
+            return pdf_bytes
 
-support_mapping = {"Low": 0, "Medium": 1, "High": 2}
-fs_val = support_mapping[family_support]
+        pdf_bytes = build_pdf_bytes(record)
+        st.download_button("📄 Download PDF Report", data=pdf_bytes, file_name=f"{student_name}_report.pdf", mime="application/pdf")
 
-# Prediction
-if st.button("Predict Performance"):
-    data = [[study_hours, attendance, prev_grade, internal_marks, assignment_score, fs_val]]
+# ---------------------------
+# Teacher Login page
+# ---------------------------
+elif page == "Teacher Login":
+    st.title("Teacher Login")
+    if st.session_state.get('teacher_logged_in', False):
+        st.success(f"Logged in as {st.session_state.get('teacher_user')}")
+        if st.button("Log out"):
+            st.session_state['teacher_logged_in'] = False
+            st.session_state['teacher_user'] = ""
+            st.experimental_rerun()
+        st.write("As a logged-in teacher you can save predictions from the Predict page.")
+    else:
+        with st.form("login"):
+            user = st.text_input("Username")
+            pwd = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                if user == DEMO_USER and pwd == DEMO_PASS:
+                    st.session_state['teacher_logged_in'] = True
+                    st.session_state['teacher_user'] = user
+                    st.success("Login successful.")
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid credentials. (Demo: teacher / pass123)")
 
-    result = model.predict(data)[0]
-    st.success(f"Predicted Final Score: {result}")
+# ---------------------------
+# Dashboard page
+# ---------------------------
+elif page == "Dashboard":
+    st.title("Teacher Dashboard")
+    if not st.session_state.get('teacher_logged_in', False):
+        st.warning("Please log in from Teacher Login to view saved predictions.")
+        st.stop()
 
-    # Remedial Suggestions
-    if result < 50:
-        st.warning("⚠️ The predicted score is low. Suggested Remedial Measures:")
-        st.write("- Increase study hours gradually.\n- Improve attendance.\n- Seek help from teachers.\n- Follow a structured timetable.\n- Reduce distractions.")
+    save_path = "predictions.csv"
+    if not os.path.exists(save_path):
+        st.info("No saved predictions yet. Save predictions from the Predict page after logging in.")
+        st.stop()
 
-    # Performance Chart
-    st.header("📊 Performance Visualization")
-    fig, ax = plt.subplots()
-    ax.bar(["Predicted Score"], [result])
-    st.pyplot(fig)
+    df = pd.read_csv(save_path)
+    st.subheader("Saved Predictions")
+    st.dataframe(df)
 
-    # Save Data
-    df = pd.DataFrame({
-        "Name": [student_name],
-        "Class": [student_class],
-        "Attendance": [attendance],
-        "Study Hours": [study_hours],
-        "Internal Marks": [internal_marks],
-        "Assignment Score": [assignment_score],
-        "Previous Grade": [prev_grade],
-        "Family Support": [family_support],
-        "Prediction": [result]
-    })
+    st.subheader("Analytics")
+    if 'predicted_score' in df.columns:
+        st.metric("Average predicted score", f"{df['predicted_score'].mean():.2f}")
+        st.write("Prediction distribution:")
+        st.bar_chart(df['predicted_score'])
+    # Allow download
+    csv_bytes = df.to_csv(index=False).encode('utf-8')
+    st.download_button("Download all predictions (CSV)", data=csv_bytes, file_name="predictions.csv", mime="text/csv")
 
-    df.to_csv("student_record.csv", mode="a", header=False, index=False)
-
-    # PDF Report
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt="Student Performance Report", ln=True, align="C")
-    pdf.ln(10)
-    for col in df.columns:
-        pdf.cell(200, 8, txt=f"{col}: {df[col][0]}", ln=True)
-    pdf.output("student_report.pdf")
-
-    st.download_button("📄 Download Student Report", data=open("student_report.pdf", "rb").read(), file_name="student_report.pdf")
+# ---------------------------
+# End central card
+# ---------------------------
+st.markdown("</div>", unsafe_allow_html=True)
