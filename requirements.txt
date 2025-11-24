@@ -1,8 +1,7 @@
 streamlit
 scikit-learn
 pandas
+matplotlib
+fpdf
 joblib
 numpy
-fpdf
-matplotlib
-Pillow
